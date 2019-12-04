@@ -85,7 +85,7 @@ func IsScannable(asset string) bool {
 		return ok
 	}
 
-	if types.IsURL(asset) {
+	if types.IsWebAddress(asset) {
 		u, _ := url.ParseRequestURI(asset) // nolint
 		asset = u.Hostname()
 	}
