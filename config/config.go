@@ -49,7 +49,7 @@ type CheckConfig struct {
 // LogConfig defines configuration params for logging.
 type LogConfig struct {
 	LogFmt   string `json:"log_fmt" toml:"LogFmt"`
-	LogLevel string `json:"log_level toml:"LogLevel"`
+	LogLevel string `json:"log_level" toml:"LogLevel"`
 }
 
 // Config holds all values regarding configuration.
@@ -59,6 +59,7 @@ type Config struct {
 	CommMode        string                `toml:"CommMode"`
 	Push            rest.RestPusherConfig `toml:"Push"`
 	AllowPrivateIPs *bool                 `toml:"AllowPrivateIps"`
+	RequiredVars    map[string]string     `toml:"RequiredVars"`
 }
 
 type optionsLogConfig struct {
