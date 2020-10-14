@@ -3,8 +3,8 @@ package push
 import (
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/adevinta/vulcan-check-sdk/agent"
+	log "github.com/sirupsen/logrus"
 )
 
 // StatePusher defines the shape a pusher communications component must satisfy in order to be used
@@ -86,6 +86,15 @@ func (p *State) SetStatusFailed(err error) {
 	p.state.Progress = 1.0
 	p.state.Report.Error = err.Error()
 	p.state.Report.Status = agent.StatusFailed
+	p.pusher.UpdateState(p.state)
+}
+
+// SetStatusInconclusive sets the state of the current check to Inconclusive and the progress to 1.0
+// This method sends a notification to the agent.
+func (p *State) SetStatusInconclusive() {
+	p.state.Status = agent.StatusInconclusive
+	p.state.Progress = 1.0
+	p.state.Report.Status = agent.StatusInconclusive
 	p.pusher.UpdateState(p.state)
 }
 
