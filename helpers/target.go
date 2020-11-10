@@ -1,26 +1,48 @@
 package helpers
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/aws/aws-sdk-go/aws/arn"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	git "gopkg.in/src-d/go-git.v4"
+	"gopkg.in/src-d/go-git.v4/config"
+	gitauth "gopkg.in/src-d/go-git.v4/plumbing/transport/http"
+	"gopkg.in/src-d/go-git.v4/storage/memory"
+
 	types "github.com/adevinta/vulcan-types"
-	"github.com/miekg/dns"
 )
 
 const (
-	dnsConfFilePath      = "/etc/resolv.conf"
-	noSuchHostErrorToken = "no such host"
+	// Supported types.
+	ipType        = "IP"
+	ipRangeType   = "IPRange"
+	domainType    = "DomainName"
+	hostnameType  = "Hostname"
+	webAddrsType  = "WebAddress"
+	awsAccType    = "AWSAccount"
+	dockerImgType = "DockerImage"
+	gitRepoType   = "GitRepository"
+
+	// minSesstime is the minimum session
+	// time (seconds) allowed by AWS to
+	// assume role into an account.
+	minSessTime = 900
 )
 
 var (
-	dnsConf *dns.ClientConfig
-	// ErrFailedToGetDNSAnswer represents error returned when unable to get a valid answer from the current configured dns
-	// servers.
+	// ErrFailedToGetDNSAnswer represents error returned
+	// when unable to get a valid answer from the current
+	// configured dns servers.
 	ErrFailedToGetDNSAnswer = errors.New("failed to get a valid answer")
 	reservedIPV4s           = []string{
 		"0.0.0.0/8",
@@ -128,4 +150,364 @@ func isAllowed(addr string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// ServiceCreds represents the credentials
+// necessary to access an authenticated service.
+// There are constructors available in this same
+// package for:
+//    - AWS Assume role through vulcan-assume-role svc.
+//    - Docker registry.
+//    - Github repository.
+type ServiceCreds interface {
+	URL() string
+	Username() string
+	Password() string
+}
+
+// AWSCreds holds data required
+// to perform an assume role request.
+type AWSCreds struct {
+	AssumeRoleURL string
+	Role          string
+}
+
+// NewAWSCreds creates a new AWS Credentials for Assume Role.
+func NewAWSCreds(assumeRoleURL, role string) *AWSCreds {
+	return &AWSCreds{
+		AssumeRoleURL: assumeRoleURL,
+		Role:          role,
+	}
+}
+func (c *AWSCreds) URL() string {
+	return c.AssumeRoleURL
+}
+func (c *AWSCreds) Username() string {
+	return c.Role
+}
+func (c *AWSCreds) Password() string {
+	return ""
+}
+
+type DockerCreds struct {
+	User string
+	Pass string
+}
+
+// DockerHubCreds represents a void
+// DockerCreds struct allowed to be
+// used with Docker Hub registry.
+var DockerHubCreds = &DockerCreds{}
+
+// NewDockerCreds creates a new Docker Credentials struct.
+func NewDockerCreds(user, pass string) *DockerCreds {
+	return &DockerCreds{
+		User: user,
+		Pass: pass,
+	}
+}
+func (c *DockerCreds) URL() string {
+	return ""
+}
+func (c *DockerCreds) Username() string {
+	return c.User
+}
+func (c *DockerCreds) Password() string {
+	return c.Pass
+}
+
+type GitCreds struct {
+	User string
+	Pass string
+}
+
+// NewGitCreds creates a new Git Credentials struct.
+// User and pass can be void if no auth is required.
+func NewGitCreds(user, pass string) *GitCreds {
+	return &GitCreds{
+		User: user,
+		Pass: pass,
+	}
+}
+func (c *GitCreds) URL() string {
+	return ""
+}
+func (c *GitCreds) Username() string {
+	return c.User
+}
+func (c *GitCreds) Password() string {
+	return c.Pass
+}
+
+// IsReachable returns wether target is reachable
+// so the check execution can be performed.
+//
+// ServiceCredentials are required for AWS, Docker and Git types.
+// Constructors for AWS, Docker and Git credentials can be found
+// in this same package.
+//
+// Verifications made depend on the asset type:
+//    - IP: None.
+//    - IPRange: None.
+//    - Hostname: NS Lookup resolution.
+//    - WebAddress: HTTP GET request.
+//    - DomainName: NS Lookup checking SOA record.
+//    - AWSAccount: Assume Role.
+//    - DockerImage: Check image exists in registry.
+//    - GitRepository: Git ls-remote.
+//
+// This function does not return any output related to the process in order to
+// verify the target's reachability. This output can be useful for some cases
+// in order to not repeat work in the check execution (e.g.: Obtaining the
+// Assume Role token). For this purpose other individual methods can be called
+// from this same package with further options for AWS, Docker and Git types.
+func IsReachable(target, assetType string, creds ServiceCreds) (bool, error) {
+	var isReachable bool
+	var err error
+
+	if (assetType == awsAccType || assetType == dockerImgType ||
+		assetType == gitRepoType) && creds == nil {
+		return false, fmt.Errorf("ServiceCredentials are required")
+	}
+
+	switch assetType {
+	case hostnameType:
+		isReachable = IsHostnameReachable(target)
+	case webAddrsType:
+		isReachable = IsWebAddrsReachable(target)
+	case domainType:
+		isReachable, err = IsDomainReachable(target)
+	case awsAccType:
+		isReachable, _, err = IsAWSAccReachable(target, creds.URL(), creds.Username(), minSessTime)
+	case dockerImgType:
+		isReachable, err = IsDockerImgReachable(target, creds.Username(), creds.Password())
+	case gitRepoType:
+		isReachable = IsGitRepoReachable(target, creds.Username(), creds.Password())
+	default:
+		// Return true if we don't have a
+		// verification in place for asset type.
+		isReachable = true
+	}
+
+	return isReachable, err
+}
+
+// IsHostnameReachable returns wether the
+// input hostname target can be resolved.
+func IsHostnameReachable(target string) bool {
+	_, err := net.LookupHost(target)
+	if err != nil {
+		if dnsErr, ok := err.(*net.DNSError); ok {
+			return !dnsErr.IsNotFound
+		}
+	}
+	return true
+}
+
+// IsWebAddrsReachable returns wether the
+// input web address accepts HTTP requests.
+func IsWebAddrsReachable(target string) bool {
+	_, err := http.Get(target)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+// IsDomainReachable returns wether the input target
+// is a reachable Domain Name. The criteria to determine
+// a target as a Domain is the existence of a SOA record.
+func IsDomainReachable(target string) (bool, error) {
+	return types.IsDomainName(target)
+}
+
+// IsAWSAccReachable returns wether the AWS account associated with the input ARN
+// allows to assume role with the given params through the vulcan-assume-role service.
+// If role is assumed correctly for the given account, STS credentials are returned.
+func IsAWSAccReachable(accARN, assumeRoleURL, role string, sessDuration int) (bool, *credentials.Credentials, error) {
+	parsedARN, err := arn.Parse(accARN)
+	if err != nil {
+		return false, nil, err
+	}
+	params := map[string]interface{}{
+		"account_id": parsedARN.AccountID,
+		"role":       role,
+	}
+	if sessDuration > 0 {
+		params["duration"] = sessDuration
+	}
+	jsonBody, _ := json.Marshal(params)
+	req, err := http.NewRequest("POST", assumeRoleURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return false, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil, err
+	}
+	defer resp.Body.Close()
+
+	// If we are not allowed to assume role on the
+	// target AWS account, check can not be executed
+	// on asset, so return false.
+	if resp.StatusCode == http.StatusForbidden {
+		return false, nil, nil
+	}
+
+	assumeRoleResp := struct {
+		AccessKey       string `json:"access_key"`
+		SecretAccessKey string `json:"secret_access_key"`
+		SessionToken    string `json:"session_token"`
+	}{}
+	buf, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return false, nil, err
+	}
+	err = json.Unmarshal(buf, &assumeRoleResp)
+	if err != nil {
+		return false, nil, err
+	}
+
+	return true, credentials.NewStaticCredentials(
+		assumeRoleResp.AccessKey,
+		assumeRoleResp.SecretAccessKey,
+		assumeRoleResp.SessionToken), nil
+}
+
+// IsDockerImgReachable returns wether the input Docker image exists
+// in registry. Void user and pass does not produce an error and will
+// interact with registry without authentication.
+func IsDockerImgReachable(target, user, pass string) (bool, error) {
+	repo, err := parseDockerRepo(target)
+	if err != nil {
+		return false, err
+	}
+
+	// In order to verify if Docker img exists, we perform
+	// a request to registry API endpoint to get data for
+	// given image and tag.
+	//
+	// This functionality at the moment of this writing is
+	// still not implemented in Docker client, so we have
+	// to contact registry's REST API directly.
+	// Reference: https://github.com/moby/moby/issues/14254
+
+	// Check registry version.
+	// Reference: https://docs.docker.com/registry/spec/api/#api-version-check
+	regVersion := "v1"
+	resp, err := http.Get(fmt.Sprintf("https://%s/v2/", repo.Registry))
+	if err != nil {
+		return false, err
+	}
+	if versionH, ok := resp.Header["Docker-Distribution-Api-Version"]; ok {
+		if len(versionH) >= 1 && versionH[0] == "registry/2.0" {
+			regVersion = "v2"
+		}
+	}
+
+	regBaseURL := fmt.Sprintf("https://%s/%s", repo.Registry, regVersion)
+	tagPath := fmt.Sprintf("/repositories/%s/tags/%s", repo.Img, repo.Tag)
+
+	// Login if necessary.
+	var token string
+	if user != "" && pass != "" {
+		auth := struct {
+			Username string
+			Password string
+		}{
+			Username: user,
+			Password: pass,
+		}
+		rqBody, err := json.Marshal(auth)
+		if err != nil {
+			return false, err
+		}
+		req, err := http.NewRequest(http.MethodPost,
+			regBaseURL+"/users/login", bytes.NewReader(rqBody))
+		if err != nil {
+			return false, err
+		}
+		req.Header.Add("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false, err
+		}
+		defer resp.Body.Close()
+
+		rsBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return false, err
+		}
+		t := struct {
+			Token string
+		}{}
+		err = json.Unmarshal(rsBody, &t)
+		if err != nil {
+			return false, err
+		}
+		token = t.Token
+	}
+
+	// Check if tag exists.
+	req, err := http.NewRequest(http.MethodGet, regBaseURL+tagPath, nil)
+	if err != nil {
+		return false, err
+	}
+	if token != "" {
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		// If we did not get HTTP response, or
+		// it was not 200 OK, return false.
+		return false, nil
+	}
+
+	return true, nil
+}
+
+type dockerRepo struct {
+	Registry string
+	Img      string // Concat of namespace and image starting with /
+	Tag      string
+}
+
+func parseDockerRepo(repo string) (dockerRepo, error) {
+	tag := "latest"
+	imgParts := strings.Split(repo, ":")
+	if len(imgParts) == 2 && imgParts[1] != "" {
+		tag = imgParts[1]
+	}
+
+	imgWithOutTag := imgParts[0]
+	u, err := url.Parse(fmt.Sprintf("http://%s", imgWithOutTag))
+	if err != nil {
+		return dockerRepo{}, fmt.Errorf("Error parsing Docker repo")
+	}
+
+	return dockerRepo{
+		Registry: u.Host,
+		Img:      u.Path,
+		Tag:      tag,
+	}, nil
+}
+
+// IsGitRepoReachable returns wether the input Git repository is reachable
+// by performing a ls-remote.
+// If no authentication is required, user and pass parameters can be void.
+func IsGitRepoReachable(target, user, pass string) bool {
+	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{target},
+	})
+	auth := &gitauth.BasicAuth{
+		Username: user,
+		Password: pass,
+	}
+	_, err := rem.List(&git.ListOptions{Auth: auth})
+	return err == nil
 }
