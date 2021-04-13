@@ -35,10 +35,10 @@ type NmapRunner interface {
 }
 
 type runner struct {
-	params []string
-	timing int
-	state  state.State
-	output []byte
+	params         []string
+	state          state.State
+	output         []byte
+	reportProgress bool
 }
 
 func (r *runner) Run(ctx context.Context) (report *gonmap.NmapRun, rawOutput *[]byte, err error) {
@@ -67,7 +67,9 @@ func (r *runner) ProcessOutputChunk(chunk []byte) bool {
 		if err != nil {
 			return false
 		}
-		r.state.SetProgress(float32(progress))
+		if r.reportProgress {
+			r.state.SetProgress(float32(progress))
+		}
 		return true
 	}
 
@@ -78,7 +80,7 @@ func (r *runner) ProcessOutputChunk(chunk []byte) bool {
 /* NewNmapCheck Creates a new base nmap check with some default options that are needed to parse
  * the results.
  */
-func NewNmapCheck(target string, s state.State, timing int, options map[string]string) NmapRunner {
+func NewNmapCheck(target string, s state.State, timing int, progress bool, options map[string]string) NmapRunner {
 	if timing == 0 {
 		timing = defaultTiming
 	}
@@ -107,21 +109,21 @@ func NewNmapCheck(target string, s state.State, timing int, options map[string]s
 	params = append(params, paramsEnd...)
 
 	r := &runner{
-		params: params,
-		timing: timing,
-		state:  s,
+		params:         params,
+		state:          s,
+		reportProgress: progress,
 	}
 	return r
 }
 
 // NewNmapTCPCheck Creates a new nmap check. TCP Connect()
-func NewNmapTCPCheck(target string, s state.State, timing int, tcpPorts []string) NmapRunner {
+func NewNmapTCPCheck(target string, s state.State, timing int, progress bool, tcpPorts []string) NmapRunner {
 	tcp := strings.Join(tcpPorts, ",")
-	return NewNmapCheck(target, s, timing, map[string]string{"-p": tcp})
+	return NewNmapCheck(target, s, timing, progress, map[string]string{"-p": tcp})
 }
 
 // NewNmapUDPCheck Creates a new nmap check.
-func NewNmapUDPCheck(target string, s state.State, timing int, udpPorts []string) NmapRunner {
+func NewNmapUDPCheck(target string, s state.State, timing int, progress bool, udpPorts []string) NmapRunner {
 	udp := strings.Join(udpPorts, ",")
-	return NewNmapCheck(target, s, timing, map[string]string{"-p": udp, "-sU": ""})
+	return NewNmapCheck(target, s, timing, progress, map[string]string{"-p": udp, "-sU": ""})
 }
