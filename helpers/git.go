@@ -2,16 +2,15 @@ package helpers
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/adevinta/vulcan-check-sdk/state"
-	git "gopkg.in/src-d/go-git.v4"
-	"gopkg.in/src-d/go-git.v4/plumbing"
-	"gopkg.in/src-d/go-git.v4/plumbing/transport/http"
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 const (
@@ -42,7 +41,7 @@ func CloneGitRepository(target string, branch string, depth int) (string, string
 	}
 
 	// Create a non-bare clone of the target repository referencing the provided branch.
-	repoPath, err := ioutil.TempDir(os.TempDir(), repoPathPattern)
+	repoPath, err := os.MkdirTemp(os.TempDir(), repoPathPattern)
 	if err != nil {
 		return "", "", fmt.Errorf("error creating directory for repository: %w", err)
 	}
