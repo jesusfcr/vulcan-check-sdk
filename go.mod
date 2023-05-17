@@ -11,7 +11,7 @@ require (
 	github.com/google/go-cmp v0.3.1
 	github.com/kr/pretty v0.2.1
 	github.com/lair-framework/go-nmap v0.0.0-20181105160706-3b9bafddefee
-	github.com/sirupsen/logrus v1.7.0
+	github.com/sirupsen/logrus v1.9.1
 	gopkg.in/resty.v1 v1.12.0
 )
 
@@ -35,7 +35,7 @@ require (
 	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e // indirect
 	golang.org/x/mod v0.4.2 // indirect
 	golang.org/x/net v0.0.0-20220607020251-c690dde0001d // indirect
-	golang.org/x/sys v0.0.0-20220610221304-9f5ed59c137d // indirect
+	golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
 	golang.org/x/tools v0.1.6-0.20210726203631-07bc1bf47fb2 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
